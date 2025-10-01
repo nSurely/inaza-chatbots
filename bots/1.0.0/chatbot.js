@@ -55,50 +55,47 @@ export default class Chatbot {
     if (!this.server) {
       throw new Error("Server URL is required");
     }
-    
+
     this.style = {
       color: style.color || "#0078d4",
       font: style.font || "Arial, sans-serif",
-      bubblePosition: style.bubblePosition || "right", // Default: right
-      bubbleSize: style.bubbleSize || "60px", // Size of the chat bubble
-      chatWidth: style.chatWidth || (type === "embed" ? "100%" : "400px"), // Width of the chat window
-      chatHeight: style.chatHeight || (type === "embed" ? "100%" : "500px"), // Height of the chat window
-      secondaryFontColor: style.secondaryFontColor || "white", // Secondary font color
-      
-      // Font configuration
-      fontFamily: style.fontFamily || "system", // "system", "google", or custom font family
-      googleFont: style.googleFont || "Inter", // "Inter" or "Merriweather"
-      fontWeight: style.fontWeight || "400", // Font weight (300, 400, 500, 600, 700)
-      
-      // Image customization
-      chatAvatar: style.chatAvatar || null, // URL to chat avatar image
-      favicon: style.favicon || null, // URL to favicon image
-      bubbleIcon: style.bubbleIcon || "💬", // Custom bubble icon (emoji or text)
-      bubbleIconImage: style.bubbleIconImage || null, // URL to bubble icon image
-      
-      ...style, // Include any additional styles
+      bubblePosition: style.bubblePosition || "right",
+      bubbleSize: style.bubbleSize || "60px",
+      chatWidth: style.chatWidth || (type === "embed" ? "100%" : "400px"),
+      chatHeight: style.chatHeight || (type === "embed" ? "100%" : "500px"),
+      secondaryFontColor: style.secondaryFontColor || "white",
+
+      fontFamily: style.fontFamily || "system",
+      googleFont: style.googleFont || "Inter",
+      fontWeight: style.fontWeight || "400",
+
+      chatAvatar: style.chatAvatar || null,
+      favicon: style.favicon || null,
+      bubbleIcon: style.bubbleIcon || "💬",
+      bubbleIconImage: style.bubbleIconImage || null,
+
+      ...style,
     };
 
     this.config = {
-      ...config, // Include any additional config options
-      lang: config.lang || "en", // Language code
-      
-      // Session management options
-      askForCookies: config.askForCookies !== false, // Default: true (ask for permission)
-      enableCookies: config.enableCookies !== false, // Default: true (enable cookie functionality)
-      autoSaveSession: config.autoSaveSession !== false, // Default: true (auto-save session data)
-      
-      // Sharing and history options
-      enableSharing: config.enableSharing !== false, // Default: true (show share button)
-      enableViewHistory: config.enableViewHistory !== false, // Default: true (show conversation history)
-      maxStoredMessages: config.maxStoredMessages || 50, // Default: 50 messages stored in cookies
-      
-      // Session expiry options
-      sessionExpiryMinutes: config.sessionExpiryMinutes || 720, // Default: 12 hours (720 minutes)
-      cookieExpiryMinutes: config.cookieExpiryMinutes || 20160, // Default: 14 days (20160 minutes)
+      ...config,
+      lang: config.lang || "en",
+
+      askForCookies: config.askForCookies !== false,
+      enableCookies: config.enableCookies !== false,
+      autoSaveSession: config.autoSaveSession !== false,
+
+      enableSharing: config.enableSharing !== false,
+      enableViewHistory: config.enableViewHistory !== false,
+      maxStoredMessages: config.maxStoredMessages || 50,
+
+      sessionExpiryMinutes: config.sessionExpiryMinutes || 720,
+      cookieExpiryMinutes: config.cookieExpiryMinutes || 20160,
+
+      newChatButton: config.newChatButton || false,
+      pollingInterval: config.pollingInterval || 5000, // Poll every 5 seconds by default
     };
 
-    // will be set to the language phrases
     this.phrases = {};
     if (this.config.lang && phrases[this.config.lang]) {
       this.phrases = phrases[this.config.lang];
@@ -110,14 +107,16 @@ export default class Chatbot {
       this.phrases.ph = this.config.placeholder;
     }
 
-    this.isMaximized = false; // Track maximized state
-    this.messages = []; // Store chat messages
-    this.files = {}; // Store uploaded files, key: file name, value: file object
-    this.loadingTimeout = null; // Track loading bubble timeout
-    this.conversationId = null; // Track current conversation ID
-    this.cookiesEnabled = false; // Track if cookies are enabled
-    this.sessionData = null; // Store session data from cookies
-    this.isMobile = this.detectMobile(); // Detect if user is on mobile device
+    this.isMaximized = false;
+    this.messages = [];
+    this.files = {};
+    this.loadingTimeout = null;
+    this.conversationId = null;
+    this.cookiesEnabled = false;
+    this.sessionData = null;
+    this.isMobile = this.detectMobile();
+    this.pollingTimer = null;
+    this.lastMessageCount = 0;
 
     if (!this.target) {
       throw new Error("Target element not found");
@@ -130,22 +129,19 @@ export default class Chatbot {
 
     if (this.type === "embed") {
       this.renderEmbed();
-      this.initializeConversation(); // Initialize conversation immediately for embed type
+      this.initializeConversation();
     } else {
       this.renderBubble();
     }
-    
-    // Load fonts and set favicon
+
     this.loadFontsAndAssets();
   }
 
   loadFontsAndAssets() {
-    // Load Google Fonts if specified
     if (this.style.fontFamily === "google" && this.style.googleFont) {
       this.loadGoogleFont(this.style.googleFont, this.style.fontWeight);
     }
-    
-    // Set favicon if specified
+
     if (this.style.favicon) {
       this.setFavicon(this.style.favicon);
     }
@@ -163,21 +159,18 @@ export default class Chatbot {
     link.rel = 'icon';
     link.type = 'image/x-icon';
     link.href = faviconUrl;
-    
-    // Remove existing favicon if any
+
     const existingFavicon = document.querySelector('link[rel="icon"]');
     if (existingFavicon) {
       existingFavicon.remove();
     }
-    
+
     document.head.appendChild(link);
   }
 
   injectStyles() {
-    const bubblePosition =
-      this.style.bubblePosition === "left" ? "left" : "right";
+    const bubblePosition = this.style.bubblePosition === "left" ? "left" : "right";
 
-    // Determine font family
     let fontFamily = this.style.font;
     if (this.style.fontFamily === "google") {
       fontFamily = `"${this.style.googleFont}", sans-serif`;
@@ -202,6 +195,7 @@ export default class Chatbot {
             transition: transform 0.2s ease;
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
+            z-index: 999;
           }
           .chat-bubble:hover {
             transform: scale(1.1);
@@ -303,6 +297,8 @@ export default class Chatbot {
             display: flex;
             align-items: flex-start;
             gap: 8px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
           }
           .chat-message.bot {
             background-color: ${this.style.color};
@@ -396,8 +392,7 @@ export default class Chatbot {
               content: "...";
             }
           }
-          
-          /* Mobile-specific styles */
+
           @media (max-width: 768px) {
             .chat-bubble {
               width: 70px;
@@ -453,27 +448,24 @@ export default class Chatbot {
   renderBubble() {
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
-    
+
     if (this.style.bubbleIconImage) {
-      // Use custom image as bubble icon
       const iconImage = document.createElement("img");
       iconImage.src = this.style.bubbleIconImage;
       iconImage.alt = "Chat";
       iconImage.className = "chat-bubble-icon-image";
       bubble.appendChild(iconImage);
     } else {
-      // Use text/emoji as bubble icon
       bubble.innerHTML = `<span class="chat-bubble-icon">${this.style.bubbleIcon}</span>`;
     }
-    
+
     bubble.addEventListener("click", () => this.renderChatWindow());
     this.target.appendChild(bubble);
   }
 
   async renderChatWindow() {
-    this.target.innerHTML = ""; // Clear existing content
+    this.target.innerHTML = "";
 
-    // Initialize conversation when chat window is opened
     if (!this.conversationId) {
       await this.initializeConversation();
     }
@@ -488,8 +480,9 @@ export default class Chatbot {
     minimizeButton.textContent = "➖";
     minimizeButton.title = this.phrases.minimize;
     minimizeButton.addEventListener("click", () => {
-      this.target.innerHTML = ""; // Clear chat window
-      this.renderBubble(); // Re-render bubble
+      this.stopPolling();
+      this.target.innerHTML = "";
+      this.renderBubble();
     });
 
     const closeButton = document.createElement("button");
@@ -497,20 +490,16 @@ export default class Chatbot {
     closeButton.title = this.phrases.close;
     closeButton.addEventListener("click", () => {
       if (confirm("Are you sure you want to close the chat? The conversation will be lost.")) {
-        if (this.ws) {
-          this.ws.close();
-          this.ws = null;
-        }
-        this.messages = []; // Clear message history
-        this.conversationId = null; // Clear conversation ID
-        
-        // Clear session data from cookies
+        this.stopPolling();
+        this.messages = [];
+        this.conversationId = null;
+
         if (this.cookiesEnabled) {
           this.deleteCookie(`chatbot_${this.id}_session`);
         }
-        
-        this.target.innerHTML = ""; // Clear chat window
-        this.renderBubble(); // Re-render bubble
+
+        this.target.innerHTML = "";
+        this.renderBubble();
       }
     });
 
@@ -520,12 +509,9 @@ export default class Chatbot {
     maximizeButton.addEventListener("click", () => {
       this.isMaximized = !this.isMaximized;
       maximizeButton.textContent = this.isMaximized ? "🔽" : "🔼";
-      maximizeButton.title = this.isMaximized
-        ? this.phrases.restore
-        : this.phrases.maximize;
+      maximizeButton.title = this.isMaximized ? this.phrases.restore : this.phrases.maximize;
       chatWindow.classList.toggle("maximized");
-      
-      // Add mobile-specific styling for full-screen experience
+
       if (this.isMobile) {
         chatWindow.classList.toggle("mobile");
       }
@@ -536,13 +522,20 @@ export default class Chatbot {
     shareButton.title = "Share Conversation";
     shareButton.addEventListener("click", () => this.copyConversationURL());
 
+    if (this.config.newChatButton) {
+      const newChatButton = document.createElement("button");
+      newChatButton.textContent = "💬";
+      newChatButton.title = "New Chat";
+      newChatButton.addEventListener("click", () => this.startNewChat());
+      chatHeader.appendChild(newChatButton);
+    }
+
     chatHeader.appendChild(minimizeButton);
     chatHeader.appendChild(maximizeButton);
     chatHeader.appendChild(closeButton);
     chatHeader.appendChild(shareButton);
 
     const chatBody = this.createChatBody();
-
     const chatInput = this.createChatInput();
 
     chatWindow.appendChild(chatHeader);
@@ -551,15 +544,16 @@ export default class Chatbot {
 
     this.target.appendChild(chatWindow);
 
-    // Restore previous messages if they exist
     if (this.messages.length > 0) {
       this.messages.forEach(msg => {
         this.addMessage(msg.content, msg.sender, false);
       });
     } else if (this.config.welcomeMessage) {
-      // Only show welcome message if there are no previous messages
       this.addMessage(this.config.welcomeMessage, "bot", true);
     }
+
+    // Start polling for new messages
+    this.startPolling();
   }
 
   createChatBody() {
@@ -589,8 +583,8 @@ export default class Chatbot {
       const file = fileInput.files[0];
       if (file) {
         this.addMessage(`📎 ${this.phrases.file}: ${file.name}`, "user");
-        this.files[file.name] = file; // Store the file
-        fileInput.value = ""; // Clear the file input
+        this.files[file.name] = file;
+        fileInput.value = "";
       }
     });
 
@@ -624,7 +618,7 @@ export default class Chatbot {
   }
 
   async renderEmbed() {
-    this.target.innerHTML = ""; // Clear any existing content
+    this.target.innerHTML = "";
 
     const chatContainer = document.createElement("div");
     chatContainer.className = "chat-container";
@@ -636,11 +630,13 @@ export default class Chatbot {
 
     chatContainer.appendChild(chatBody);
     chatContainer.appendChild(chatInput);
-    
+
     this.target.appendChild(chatContainer);
 
-    // Initialize conversation for embed - this will add the initial bot message
     await this.initializeConversation();
+
+    // Start polling for embed mode too
+    this.startPolling();
   }
 
   addMessage(content, sender, store = true) {
@@ -654,33 +650,58 @@ export default class Chatbot {
     chatBody.appendChild(messageElement);
     chatBody.scrollTop = chatBody.scrollHeight;
 
-    // Store the message in memory if store flag is true
     if (store) {
       this.messages.push({ content, sender });
-      
-      // Update session data in cookies if enabled and auto-save is on
+
       if (this.cookiesEnabled && this.config.autoSaveSession && this.conversationId) {
         this.updateLastMessageTime();
       }
     }
 
     if (sender === "user") {
-      // Send the user's message over the WebSocket with session_id
-      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.conversationId) {
-        const message = {
-          message: content,
+      this.sendUserMessage(content);
+    }
+  }
+
+  async sendUserMessage(message) {
+    if (!this.conversationId) {
+      console.error("No conversation ID available");
+      return;
+    }
+
+    this.triggerLoadingBubble();
+
+    try {
+      const response = await fetch(`${this.server}/api/v1/chat/${this.assistant}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: message,
           session_id: this.conversationId
-        };
-        this.ws.send(JSON.stringify(message));
-      } else {
-        console.error("WebSocket is not open or no session ID");
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to send message: ${response.statusText}`);
       }
+
+      const data = await response.json();
+
+      this.resetLoadingBubble();
+
+      this.addMessage(data.response, "bot", true);
+
+    } catch (error) {
+      console.error("Failed to send message:", error);
+      this.resetLoadingBubble();
+      this.addMessage("Sorry, I'm having trouble responding right now. Please try again.", "bot", false);
     }
   }
 
   async initializeConversation() {
     try {
-      // Handle cookie permissions based on configuration
       if (this.config.enableCookies) {
         if (this.config.askForCookies && !this.cookiesEnabled) {
           const cookieAccepted = await this.askForCookiePermission();
@@ -688,102 +709,77 @@ export default class Chatbot {
             console.log('Cookies declined, starting new conversation');
           }
         } else if (!this.config.askForCookies) {
-          // Auto-enable cookies without asking (for regions where permission is not required)
           this.cookiesEnabled = true;
           console.log('Cookies auto-enabled based on configuration');
         }
       } else {
-        // Cookies disabled by configuration
         this.cookiesEnabled = false;
         console.log('Cookies disabled by configuration');
       }
 
-      // Check for conversation ID in URL query parameters (highest priority)
       const urlConversationId = this.getConversationIdFromURL();
       if (urlConversationId) {
         console.log(`Resuming conversation from URL: ${urlConversationId}`);
         this.conversationId = urlConversationId;
-        this.initializeWebSocket();
+        await this.loadConversationHistory();
         return;
       }
 
-      // Check for existing session in cookies (if cookies enabled)
       if (this.cookiesEnabled) {
         this.sessionData = this.loadSessionData();
         if (this.sessionData) {
           console.log(`Resuming conversation from cookies: ${this.sessionData.conversationId}`);
           this.conversationId = this.sessionData.conversationId;
-          
-          // Try to restore messages from server history first
-          if (this.config.enableViewHistory) {
-            try {
-              const historyResponse = await fetch(`${this.server}/api/v1/public/sessions/${this.conversationId}/history`);
-              if (historyResponse.ok) {
-                const historyData = await historyResponse.json();
-                if (historyData.events && historyData.events.length > 0) {
-                  // Restore messages from server history
-                  this.messages = [];
-                  historyData.events.forEach(event => {
-                    if (event.event_type === 'message') {
-                      if (event.user_message) {
-                        this.messages.push({ content: event.user_message, sender: 'user' });
-                      }
-                      if (event.bot_response) {
-                        this.messages.push({ content: event.bot_response, sender: 'bot' });
-                      }
-                    }
-                  });
-                  
-                  // Display the messages in the chat
-                  this.messages.forEach(msg => {
-                    this.addMessage(msg.content, msg.sender, false);
-                  });
-                  
-                  console.log(`Restored ${this.messages.length} messages from server history`);
-                  this.initializeWebSocket();
-                  return;
-                }
-              }
-            } catch (error) {
-              console.warn('Failed to fetch server history, falling back to cookie data:', error);
-            }
-          }
-          
-          // Fallback to cookie data if server history failed
-          if (this.config.enableViewHistory && this.sessionData.messages && this.sessionData.messages.length > 0) {
-            this.messages = this.sessionData.messages;
-            // Display the messages in the chat
-            this.messages.forEach(msg => {
-              this.addMessage(msg.content, msg.sender, false);
-            });
-          }
-          
-          this.initializeWebSocket();
+          await this.loadConversationHistory();
           return;
         }
       }
 
-      // No existing conversation found, start a new one
       console.log('Starting new conversation');
       await this.startNewConversation();
 
     } catch (error) {
       console.error('Failed to initialize conversation:', error);
-      // Fallback: try to start a new conversation
       await this.startNewConversation();
+    }
+  }
+
+  async loadConversationHistory() {
+    try {
+      const response = await fetch(`${this.server}/api/v1/chat/sessions/${this.conversationId}/history`);
+      if (!response.ok) {
+        throw new Error('Failed to load history');
+      }
+
+      const data = await response.json();
+
+      if (data.messages && data.messages.length > 0) {
+        this.messages = data.messages.map(msg => ({
+          content: msg.content,
+          sender: msg.role === 'user' ? 'user' : 'bot'
+        }));
+
+        this.messages.forEach(msg => {
+          this.addMessage(msg.content, msg.sender, false);
+        });
+
+        this.lastMessageCount = this.messages.length;
+        console.log(`Restored ${this.messages.length} messages from history`);
+      }
+    } catch (error) {
+      console.warn('Failed to load conversation history:', error);
     }
   }
 
   async startNewConversation() {
     try {
-      // Start a new conversation via REST API using the new secure endpoint
-      const response = await fetch(`${this.server}/api/v1/public/${this.assistant}/start_chat`, {
+      const response = await fetch(`${this.server}/api/v1/chat/${this.assistant}/start_chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: "Hello" // Initial greeting message
+          message: "Hello"
         })
       });
 
@@ -793,24 +789,63 @@ export default class Chatbot {
 
       const data = await response.json();
       this.conversationId = data.session_id;
-      
+
       console.log(`New conversation started: ${this.conversationId}`);
 
-      // Add the initial bot response to the chat
       this.addMessage(data.response, "bot", false);
+      this.lastMessageCount = 1;
 
-      // Save session data to cookies if enabled
       if (this.cookiesEnabled && this.config.autoSaveSession) {
         this.saveSessionData();
       }
 
-      // Now initialize WebSocket connection
-      this.initializeWebSocket();
-
     } catch (error) {
       console.error('Failed to start new conversation:', error);
-      // Fallback: try to initialize WebSocket anyway
-      this.initializeWebSocket();
+    }
+  }
+
+  startPolling() {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+    }
+
+    this.pollingTimer = setInterval(async () => {
+      await this.pollForNewMessages();
+    }, this.config.pollingInterval);
+  }
+
+  stopPolling() {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+      this.pollingTimer = null;
+    }
+  }
+
+  async pollForNewMessages() {
+    if (!this.conversationId) return;
+
+    try {
+      const response = await fetch(`${this.server}/api/v1/chat/sessions/${this.conversationId}/history`);
+      if (!response.ok) return;
+
+      const data = await response.json();
+
+      if (data.messages && data.messages.length > this.lastMessageCount) {
+        // New messages available
+        const newMessages = data.messages.slice(this.lastMessageCount);
+
+        newMessages.forEach(msg => {
+          const sender = msg.role === 'user' ? 'user' : 'bot';
+          // Only add if not already in our local messages
+          if (!this.messages.some(m => m.content === msg.content && m.sender === sender)) {
+            this.addMessage(msg.content, sender, true);
+          }
+        });
+
+        this.lastMessageCount = data.messages.length;
+      }
+    } catch (error) {
+      // Silent fail - don't spam console
     }
   }
 
@@ -821,21 +856,21 @@ export default class Chatbot {
 
     this.loadingTimeout = setTimeout(() => {
       this.addLoadingBubble();
-    }, 3000);
+    }, 1000);
   }
 
   addLoadingBubble() {
     const chatBody = this.target.querySelector(".chat-body");
     if (!chatBody) return;
 
-    if (chatBody.querySelector(".chat-loading")) return; // Prevent duplicate loading bubbles
+    if (chatBody.querySelector(".chat-loading")) return;
 
     const loadingElement = document.createElement("div");
     loadingElement.className = "chat-loading";
-    loadingElement.textContent = "Thinking"; // Base text (dots animated with CSS)
+    loadingElement.textContent = "Thinking";
 
     chatBody.appendChild(loadingElement);
-    chatBody.scrollTop = chatBody.scrollHeight; // Ensure it's visible
+    chatBody.scrollTop = chatBody.scrollHeight;
   }
 
   resetLoadingBubble() {
@@ -853,11 +888,10 @@ export default class Chatbot {
     }
   }
 
-  // Cookie management methods
-  setCookie(name, value, minutes = 10080) { // Default: 7 days (10080 minutes)
+  setCookie(name, value, minutes = 10080) {
     try {
       const expires = new Date();
-      expires.setTime(expires.getTime() + (minutes * 60 * 1000)); // Convert minutes to milliseconds
+      expires.setTime(expires.getTime() + (minutes * 60 * 1000));
       document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/`;
       this.cookiesEnabled = true;
       return true;
@@ -898,10 +932,9 @@ export default class Chatbot {
     }
   }
 
-  // Session management methods
   saveSessionData() {
     if (!this.cookiesEnabled || !this.conversationId || !this.config.autoSaveSession) return false;
-    
+
     const sessionData = {
       conversationId: this.conversationId,
       startTime: Date.now(),
@@ -909,35 +942,31 @@ export default class Chatbot {
       assistant: this.assistant,
       messages: this.config.enableViewHistory ? this.messages.slice(-this.config.maxStoredMessages) : []
     };
-    
+
     return this.setCookie(`chatbot_${this.id}_session`, JSON.stringify(sessionData), this.config.cookieExpiryMinutes);
   }
 
   loadSessionData() {
     const sessionCookie = this.getCookie(`chatbot_${this.id}_session`);
     if (!sessionCookie) return null;
-    
+
     try {
       const sessionData = JSON.parse(sessionCookie);
-      
-      // Check if session is still valid (within configured hours)
+
       const now = Date.now();
       const sessionAge = now - sessionData.startTime;
-      const maxSessionAge = this.config.sessionExpiryMinutes * 60 * 1000; // Convert minutes to milliseconds
-      
+      const maxSessionAge = this.config.sessionExpiryMinutes * 60 * 1000;
+
       if (sessionAge > maxSessionAge) {
-        // Session expired, remove cookie
         this.deleteCookie(`chatbot_${this.id}_session`);
         return null;
       }
-      
-      // Check if this is the same assistant
+
       if (sessionData.assistant !== this.assistant) {
-        // Different assistant, remove cookie
         this.deleteCookie(`chatbot_${this.id}_session`);
         return null;
       }
-      
+
       return sessionData;
     } catch (e) {
       console.warn('Invalid session data in cookie:', e);
@@ -948,7 +977,7 @@ export default class Chatbot {
 
   updateLastMessageTime() {
     if (!this.cookiesEnabled || !this.conversationId || !this.config.autoSaveSession) return;
-    
+
     const sessionCookie = this.getCookie(`chatbot_${this.id}_session`);
     if (sessionCookie) {
       try {
@@ -962,13 +991,11 @@ export default class Chatbot {
     }
   }
 
-  // Check for conversation ID in URL query parameters
   getConversationIdFromURL() {
     const urlParams = new URLSearchParams(window.location.search);
     return urlParams.get('conversation_id');
   }
 
-  // Ask user for cookie permission
   askForCookiePermission() {
     return new Promise((resolve) => {
       const cookieDialog = document.createElement('div');
@@ -983,8 +1010,7 @@ export default class Chatbot {
           </div>
         </div>
       `;
-      
-      // Add styles for the dialog
+
       const styles = `
         .cookie-permission-dialog {
           position: fixed;
@@ -1028,20 +1054,20 @@ export default class Chatbot {
           color: #333;
         }
       `;
-      
+
       const styleSheet = document.createElement("style");
       styleSheet.type = "text/css";
       styleSheet.textContent = styles;
       document.head.appendChild(styleSheet);
-      
+
       document.body.appendChild(cookieDialog);
-      
+
       cookieDialog.querySelector('.cookie-accept').addEventListener('click', () => {
         document.body.removeChild(cookieDialog);
         this.cookiesEnabled = true;
         resolve(true);
       });
-      
+
       cookieDialog.querySelector('.cookie-decline').addEventListener('click', () => {
         document.body.removeChild(cookieDialog);
         this.cookiesEnabled = false;
@@ -1050,93 +1076,25 @@ export default class Chatbot {
     });
   }
 
-  initializeWebSocket() {
-    if (this.ws) {
-      // If there's an existing connection, close it
-      this.ws.close();
-    }
-
-    // Establish a WebSocket connection (no token required)
-    const wsUrl = this.server.replace('http://', 'ws://').replace('https://', 'wss://');
-    this.ws = new WebSocket(`${wsUrl}/api/v1/public/${this.assistant}/ws`);
-
-    // WebSocket event handlers
-    this.ws.onopen = () => {
-      console.log("WebSocket connected");
-      
-      // No need to send join message - session is already established via REST API
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === "message") {
-          this.addMessage(data.content, data.role === "user" ? "user" : "bot", false);
-        } else if (data.type === "error") {
-          console.error("WebSocket error:", data.content);
-          this.addMessage(`Error: ${data.content}`, "bot", false);
-        } else if (data.response) {
-          // Handle direct response format
-          this.addMessage(data.response, "bot", false);
-          
-          // Update session data in cookies if this is a new conversation
-          if (this.cookiesEnabled && this.conversationId && !this.sessionData) {
-            this.saveSessionData();
-          }
-        }
-      } catch (e) {
-        // If the message is plain text (fallback)
-        this.addMessage(event.data, "bot");
-      }
-    };
-
-    this.ws.onclose = () => {
-      console.log("WebSocket connection closed");
-    };
-
-    this.ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
-
-    // Add page visibility change listener to save session data
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.cookiesEnabled && this.conversationId) {
-        // Page is hidden (user switched tabs or minimized), save session data
-        this.saveSessionData();
-      }
-    });
-
-    // Add beforeunload listener to save session data when leaving the page
-    window.addEventListener('beforeunload', () => {
-      if (this.cookiesEnabled && this.conversationId) {
-        this.saveSessionData();
-      }
-    });
-  }
-
-  // Generate shareable conversation URL
   generateShareableURL() {
     if (!this.conversationId) return null;
-    
+
     const currentUrl = new URL(window.location.href);
     currentUrl.searchParams.set('conversation_id', this.conversationId);
     return currentUrl.toString();
   }
 
-  // Copy conversation URL to clipboard
   async copyConversationURL() {
     const shareableURL = this.generateShareableURL();
     if (!shareableURL) {
       alert('No conversation to share');
       return;
     }
-    
+
     try {
       await navigator.clipboard.writeText(shareableURL);
       alert('Conversation URL copied to clipboard!');
     } catch (err) {
-      // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = shareableURL;
       document.body.appendChild(textArea);
@@ -1144,6 +1102,29 @@ export default class Chatbot {
       document.execCommand('copy');
       document.body.removeChild(textArea);
       alert('Conversation URL copied to clipboard!');
+    }
+  }
+
+  async startNewChat() {
+    if (confirm("Start a new chat? The current conversation will be lost.")) {
+      this.stopPolling();
+
+      this.messages = [];
+      this.conversationId = null;
+      this.sessionData = null;
+      this.lastMessageCount = 0;
+
+      if (this.cookiesEnabled) {
+        this.deleteCookie(`chatbot_${this.id}_session`);
+      }
+
+      const chatBody = this.target.querySelector(".chat-body");
+      if (chatBody) {
+        chatBody.innerHTML = "";
+      }
+
+      await this.startNewConversation();
+      this.startPolling();
     }
   }
 
@@ -1161,4 +1142,8 @@ export default class Chatbot {
       return navigator.userAgent.match(toMatchItem);
     });
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.Chatbot = Chatbot;
 }
