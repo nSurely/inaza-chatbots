@@ -55,50 +55,47 @@ export default class Chatbot {
     if (!this.server) {
       throw new Error("Server URL is required");
     }
-    
+
     this.style = {
       color: style.color || "#0078d4",
       font: style.font || "Arial, sans-serif",
-      bubblePosition: style.bubblePosition || "right", // Default: right
-      bubbleSize: style.bubbleSize || "60px", // Size of the chat bubble
-      chatWidth: style.chatWidth || (type === "embed" ? "100%" : "400px"), // Width of the chat window
-      chatHeight: style.chatHeight || (type === "embed" ? "100%" : "500px"), // Height of the chat window
-      secondaryFontColor: style.secondaryFontColor || "white", // Secondary font color
-      
-      // Font configuration
-      fontFamily: style.fontFamily || "system", // "system", "google", or custom font family
-      googleFont: style.googleFont || "Inter", // "Inter" or "Merriweather"
-      fontWeight: style.fontWeight || "400", // Font weight (300, 400, 500, 600, 700)
-      
-      // Image customization
-      chatAvatar: style.chatAvatar || null, // URL to chat avatar image
-      favicon: style.favicon || null, // URL to favicon image
-      bubbleIcon: style.bubbleIcon || "💬", // Custom bubble icon (emoji or text)
-      bubbleIconImage: style.bubbleIconImage || null, // URL to bubble icon image
-      
-      ...style, // Include any additional styles
+      bubblePosition: style.bubblePosition || "right",
+      bubbleSize: style.bubbleSize || "60px",
+      chatWidth: style.chatWidth || (type === "embed" ? "100%" : "400px"),
+      chatHeight: style.chatHeight || (type === "embed" ? "100%" : "500px"),
+      secondaryFontColor: style.secondaryFontColor || "white",
+
+      fontFamily: style.fontFamily || "system",
+      googleFont: style.googleFont || "Inter",
+      fontWeight: style.fontWeight || "400",
+
+      chatAvatar: style.chatAvatar || null,
+      favicon: style.favicon || null,
+      bubbleIcon: style.bubbleIcon || "💬",
+      bubbleIconImage: style.bubbleIconImage || null,
+
+      ...style,
     };
 
     this.config = {
-      ...config, // Include any additional config options
-      lang: config.lang || "en", // Language code
-      
-      // Session management options
-      askForCookies: config.askForCookies !== false, // Default: true (ask for permission)
-      enableCookies: config.enableCookies !== false, // Default: true (enable cookie functionality)
-      autoSaveSession: config.autoSaveSession !== false, // Default: true (auto-save session data)
-      
-      // Sharing and history options
-      enableSharing: config.enableSharing !== false, // Default: true (show share button)
-      enableViewHistory: config.enableViewHistory !== false, // Default: true (show conversation history)
-      maxStoredMessages: config.maxStoredMessages || 50, // Default: 50 messages stored in cookies
-      
-      // Session expiry options
-      sessionExpiryMinutes: config.sessionExpiryMinutes || 720, // Default: 12 hours (720 minutes)
-      cookieExpiryMinutes: config.cookieExpiryMinutes || 20160, // Default: 14 days (20160 minutes)
+      ...config,
+      lang: config.lang || "en",
+
+      askForCookies: config.askForCookies !== false,
+      enableCookies: config.enableCookies !== false,
+      autoSaveSession: config.autoSaveSession !== false,
+
+      enableSharing: config.enableSharing !== false,
+      enableViewHistory: config.enableViewHistory !== false,
+      maxStoredMessages: config.maxStoredMessages || 50,
+
+      sessionExpiryMinutes: config.sessionExpiryMinutes || 720,
+      cookieExpiryMinutes: config.cookieExpiryMinutes || 20160,
+
+      newChatButton: config.newChatButton || false,
+      pollingInterval: config.pollingInterval || 5000, // Poll every 5 seconds by default
     };
 
-    // will be set to the language phrases
     this.phrases = {};
     if (this.config.lang && phrases[this.config.lang]) {
       this.phrases = phrases[this.config.lang];
@@ -110,14 +107,20 @@ export default class Chatbot {
       this.phrases.ph = this.config.placeholder;
     }
 
-    this.isMaximized = false; // Track maximized state
-    this.messages = []; // Store chat messages
-    this.files = {}; // Store uploaded files, key: file name, value: file object
-    this.loadingTimeout = null; // Track loading bubble timeout
-    this.conversationId = null; // Track current conversation ID
-    this.cookiesEnabled = false; // Track if cookies are enabled
-    this.sessionData = null; // Store session data from cookies
-    this.isMobile = this.detectMobile(); // Detect if user is on mobile device
+    this.isMaximized = false;
+    this.messages = [];
+    this.files = {};
+    this.loadingTimeout = null;
+    this.sessionId = null;
+    this.cookiesEnabled = false;
+    this.sessionData = null;
+    this.isMobile = this.detectMobile();
+    this.pollingTimer = null;
+    this.lastMessageCount = 0;
+    this.lastMessageTime = 0; // For rate limiting
+    this.messageCooldown = 3000; // 3 seconds cooldown
+    this.pollingFailures = 0;
+    this.maxPollingFailures = 10;
 
     if (!this.target) {
       throw new Error("Target element not found");
@@ -130,22 +133,34 @@ export default class Chatbot {
 
     if (this.type === "embed") {
       this.renderEmbed();
-      this.initializeConversation(); // Initialize conversation immediately for embed type
+      this.initializeSession();
     } else {
       this.renderBubble();
     }
-    
-    // Load fonts and set favicon
+
     this.loadFontsAndAssets();
   }
 
+  async retryWithBackoff(fn, maxRetries = 3, initialDelay = 1000) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (attempt === maxRetries - 1) {
+          throw error;
+        }
+        const delay = initialDelay * Math.pow(2, attempt);
+        console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms:`, error.message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   loadFontsAndAssets() {
-    // Load Google Fonts if specified
     if (this.style.fontFamily === "google" && this.style.googleFont) {
       this.loadGoogleFont(this.style.googleFont, this.style.fontWeight);
     }
-    
-    // Set favicon if specified
+
     if (this.style.favicon) {
       this.setFavicon(this.style.favicon);
     }
@@ -163,21 +178,19 @@ export default class Chatbot {
     link.rel = 'icon';
     link.type = 'image/x-icon';
     link.href = faviconUrl;
-    
-    // Remove existing favicon if any
+
     const existingFavicon = document.querySelector('link[rel="icon"]');
     if (existingFavicon) {
       existingFavicon.remove();
     }
-    
+
     document.head.appendChild(link);
   }
 
   injectStyles() {
-    const bubblePosition =
-      this.style.bubblePosition === "left" ? "left" : "right";
+    const bubblePosition = this.style.bubblePosition === "left" ? "left" : "right";
+    const isEmbed = this.type === "embed";
 
-    // Determine font family
     let fontFamily = this.style.font;
     if (this.style.fontFamily === "google") {
       fontFamily = `"${this.style.googleFont}", sans-serif`;
@@ -186,57 +199,77 @@ export default class Chatbot {
     }
 
     const styles = `
+          /* Chat Bubble - only for bubble mode */
           .chat-bubble {
             position: fixed;
             bottom: 20px;
             ${bubblePosition}: 20px;
             width: ${this.style.bubbleSize};
             height: ${this.style.bubbleSize};
-            background-color: ${this.style.color};
+            background: linear-gradient(135deg, ${this.style.color} 0%, ${this.darkenColor(this.style.color, 20)} 100%);
             border-radius: 50%;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.1);
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            transition: transform 0.2s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
+            z-index: 999;
           }
           .chat-bubble:hover {
-            transform: scale(1.1);
+            transform: translateY(-4px) scale(1.05);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.15);
+          }
+          .chat-bubble:active {
+            transform: translateY(-2px) scale(1.02);
           }
           .chat-bubble-icon {
-            font-size: 24px;
+            font-size: 28px;
             color: ${this.style.secondaryFontColor};
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
           }
           .chat-bubble-icon-image {
-            width: 32px;
-            height: 32px;
+            width: 36px;
+            height: 36px;
             object-fit: contain;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
           }
+
+          /* Chat Container */
           .chat-container {
-            position: fixed;
-            bottom: 20px;
-            ${bubblePosition}: 20px;
-            width: ${this.style.chatWidth};
-            height: ${this.style.chatHeight};
-            background-color: #f5f5f5;
+            ${isEmbed ? `
+              position: relative;
+              width: 100%;
+              height: 100%;
+              bottom: auto;
+              ${bubblePosition}: auto;
+            ` : `
+              position: fixed;
+              bottom: 20px;
+              ${bubblePosition}: 20px;
+              width: ${this.style.chatWidth};
+              height: ${this.style.chatHeight};
+            `}
+            background: linear-gradient(to bottom, #ffffff 0%, #f8f9fa 100%);
             display: flex;
             flex-direction: column;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            border-radius: ${isEmbed ? '0' : '16px'};
+            box-shadow: ${isEmbed ? 'none' : '0 12px 48px rgba(0, 0, 0, 0.15), 0 4px 16px rgba(0, 0, 0, 0.1)'};
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
             z-index: 1000;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow: hidden;
+            backdrop-filter: blur(10px);
           }
           .chat-container.maximized {
             bottom: 2.5%;
             ${bubblePosition}: 2.5%;
             width: 95%;
             height: 95%;
-            border-radius: 10px;
+            border-radius: 16px;
           }
           .chat-container.maximized.mobile {
             bottom: 0;
@@ -245,143 +278,273 @@ export default class Chatbot {
             height: 100%;
             border-radius: 0;
           }
+
+          /* Chat Header */
           .chat-header {
-            background-color: ${this.style.color};
+            background: linear-gradient(135deg, ${this.style.color} 0%, ${this.darkenColor(this.style.color, 15)} 100%);
             color: ${this.style.secondaryFontColor};
-            padding: 10px;
+            padding: 16px 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-size: 16px;
-            border-radius: 10px 10px 0 0;
+            border-radius: ${isEmbed ? '0' : '16px 16px 0 0'};
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            position: relative;
+            z-index: 10;
+          }
+          .chat-header::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.2) 50%, transparent 100%);
           }
           .chat-header h3 {
             margin: 0;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 18px;
           }
           .chat-avatar {
-            width: 24px;
-            height: 24px;
+            width: 28px;
+            height: 28px;
             border-radius: 50%;
             object-fit: cover;
+            border: 2px solid rgba(255, 255, 255, 0.3);
           }
           .chat-header p {
             margin: 0;
-            font-size: 14px;
-            opacity: 0.8;
+            font-size: 13px;
+            opacity: 0.9;
           }
           .chat-header button {
-            background: none;
+            background: rgba(255, 255, 255, 0.1);
             border: none;
             color: ${this.style.secondaryFontColor};
             cursor: pointer;
             font-size: 20px;
-            transition: background-color 0.3s ease;
-            border-radius: 5px;
+            transition: all 0.2s ease;
+            border-radius: 8px;
+            padding: 6px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
           }
           .chat-header button:hover {
-            background-color: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.25);
+            transform: scale(1.05);
           }
+          .chat-header button:active {
+            transform: scale(0.95);
+          }
+
+          /* Chat Body */
           .chat-body {
             flex: 1;
             overflow-y: auto;
-            padding: 10px;
+            padding: 20px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            font-size: 14px;
-            color: #333;
+            gap: 16px;
+            font-size: 15px;
+            color: #2c3e50;
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
+            background: #ffffff;
           }
+          .chat-body::-webkit-scrollbar {
+            width: 6px;
+          }
+          .chat-body::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .chat-body::-webkit-scrollbar-thumb {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 3px;
+          }
+          .chat-body::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 0, 0, 0.2);
+          }
+
+          /* Chat Messages */
           .chat-message {
-            padding: 8px 12px;
-            border-radius: 10px;
-            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            max-width: 75%;
             display: flex;
             align-items: flex-start;
-            gap: 8px;
+            gap: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            line-height: 1.5;
+            animation: messageSlideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+          }
+          @keyframes messageSlideIn {
+            from {
+              opacity: 0;
+              transform: translateY(10px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
           }
           .chat-message.bot {
-            background-color: ${this.style.color};
+            background: linear-gradient(135deg, ${this.style.color} 0%, ${this.darkenColor(this.style.color, 10)} 100%);
             color: ${this.style.secondaryFontColor};
             align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
           }
           .chat-message.user {
-            background-color: #e1e1e1;
-            color: black;
+            background: linear-gradient(135deg, #f0f0f0 0%, #e8e8e8 100%);
+            color: #2c3e50;
             align-self: flex-end;
             flex-direction: row-reverse;
+            border-bottom-right-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
           }
           .message-avatar {
-            width: 20px;
-            height: 20px;
+            width: 24px;
+            height: 24px;
             border-radius: 50%;
             object-fit: cover;
             flex-shrink: 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
           }
           .message-content {
             flex: 1;
+            font-size: 14px;
           }
+
+          /* Chat Input */
           .chat-input {
-            margin-top: 10px;
+            padding: 16px 20px;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 10px;
+            gap: 12px;
+            background: #ffffff;
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
+            box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.03);
           }
           .chat-input input[type="text"] {
             flex: 1;
-            padding: 8px;
-            border: 1px solid #ccc;
-            border-radius: 10px;
+            padding: 12px 16px;
+            border: 2px solid #e8e8e8;
+            border-radius: 24px;
             font-size: 14px;
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
+            transition: all 0.2s ease;
+            background: #f8f9fa;
+            color: #2c3e50;
+          }
+          .chat-input input[type="text"]:focus {
+            outline: none;
+            border-color: ${this.style.color};
+            background: #ffffff;
+            box-shadow: 0 0 0 4px ${this.hexToRgba(this.style.color, 0.1)};
+          }
+          .chat-input input[type="text"]::placeholder {
+            color: #95a5a6;
           }
           .chat-input button {
-            padding: 8px 16px;
-            background-color: ${this.style.color};
+            padding: 12px 20px;
+            background: linear-gradient(135deg, ${this.style.color} 0%, ${this.darkenColor(this.style.color, 10)} 100%);
             color: ${this.style.secondaryFontColor};
             border: none;
-            border-radius: 10px;
+            border-radius: 24px;
             cursor: pointer;
             font-family: ${fontFamily};
-            font-weight: ${this.style.fontWeight};
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px ${this.hexToRgba(this.style.color, 0.3)};
+          }
+          .chat-input button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px ${this.hexToRgba(this.style.color, 0.4)};
+          }
+          .chat-input button:active {
+            transform: translateY(0);
+          }
+          .chat-input button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
           }
           .chat-input input[type="file"] {
             display: none;
           }
           .chat-input label {
-            background-color: #e1e1e1;
-            color: black;
-            padding: 8px 12px;
-            border-radius: 10px;
+            background: #f0f0f0;
+            color: #2c3e50;
+            padding: 10px 14px;
+            border-radius: 20px;
             cursor: pointer;
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
           }
+          .chat-input label:hover {
+            background: #e0e0e0;
+            transform: scale(1.05);
+          }
+
+          /* Loading Animation */
           .chat-loading {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
+            padding: 12px 16px;
+            border-radius: 18px;
+            max-width: 75%;
+            align-self: flex-start;
             font-size: 14px;
-            color: #777;
+            color: #7f8c8d;
             font-style: italic;
-            opacity: 0.7;
+            background: #f8f9fa;
+            border-bottom-left-radius: 4px;
             font-family: ${fontFamily};
             font-weight: ${this.style.fontWeight};
+            animation: messageSlideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          }
+          .chat-loading::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: ${this.style.color};
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+          }
+          @keyframes pulse {
+            0%, 100% {
+              opacity: 0.3;
+              transform: scale(0.8);
+            }
+            50% {
+              opacity: 1;
+              transform: scale(1.2);
+            }
           }
           .chat-loading::after {
-            content: " ";
+            content: "";
             display: inline-block;
-            width: 0.8em;
+            width: 1em;
             text-align: left;
             animation: loading-dots 1.5s infinite steps(3, end);
           }
-
           @keyframes loading-dots {
             0% {
               content: "";
@@ -396,50 +559,57 @@ export default class Chatbot {
               content: "...";
             }
           }
-          
-          /* Mobile-specific styles */
+
+          /* Mobile Responsive */
           @media (max-width: 768px) {
             .chat-bubble {
-              width: 70px;
-              height: 70px;
-              bottom: 15px;
-              ${bubblePosition}: 15px;
+              width: 64px;
+              height: 64px;
+              bottom: 16px;
+              ${bubblePosition}: 16px;
             }
             .chat-bubble-icon {
-              font-size: 28px;
+              font-size: 32px;
             }
             .chat-bubble-icon-image {
-              width: 40px;
-              height: 40px;
+              width: 42px;
+              height: 42px;
             }
-            .chat-container {
-              bottom: 15px;
-              ${bubblePosition}: 15px;
-              width: calc(100vw - 30px);
-              height: calc(100vh - 30px);
-              max-width: 400px;
-              max-height: 600px;
+            .chat-container:not(.maximized) {
+              bottom: 16px;
+              ${bubblePosition}: 16px;
+              width: calc(100vw - 32px);
+              height: calc(100vh - 32px);
+              max-width: 420px;
+              max-height: 640px;
+            }
+            .chat-header {
+              padding: 14px 16px;
+            }
+            .chat-header h3 {
+              font-size: 16px;
             }
             .chat-header button {
-              font-size: 24px;
-              padding: 8px;
-              min-width: 44px;
-              min-height: 44px;
+              font-size: 22px;
+              width: 36px;
+              height: 36px;
+            }
+            .chat-body {
+              padding: 16px;
+            }
+            .chat-input {
+              padding: 12px 16px;
             }
             .chat-input input[type="text"] {
-              padding: 12px;
+              padding: 14px 18px;
               font-size: 16px;
             }
             .chat-input button {
-              padding: 12px 20px;
+              padding: 14px 22px;
               font-size: 16px;
-              min-height: 44px;
             }
             .chat-input label {
               padding: 12px 16px;
-              min-height: 44px;
-              display: flex;
-              align-items: center;
             }
           }
         `;
@@ -450,32 +620,57 @@ export default class Chatbot {
     document.head.appendChild(styleSheet);
   }
 
+  darkenColor(color, percentage) {
+    // Convert hex to RGB
+    let r = parseInt(color.slice(1, 3), 16);
+    let g = parseInt(color.slice(3, 5), 16);
+    let b = parseInt(color.slice(5, 7), 16);
+
+    // Darken by percentage
+    r = Math.floor(r * (1 - percentage / 100));
+    g = Math.floor(g * (1 - percentage / 100));
+    b = Math.floor(b * (1 - percentage / 100));
+
+    // Convert back to hex
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  }
+
+  hexToRgba(hex, alpha) {
+    // Remove # if present
+    hex = hex.replace('#', '');
+
+    // Parse hex values
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   renderBubble() {
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
-    
+
     if (this.style.bubbleIconImage) {
-      // Use custom image as bubble icon
       const iconImage = document.createElement("img");
       iconImage.src = this.style.bubbleIconImage;
       iconImage.alt = "Chat";
       iconImage.className = "chat-bubble-icon-image";
       bubble.appendChild(iconImage);
     } else {
-      // Use text/emoji as bubble icon
       bubble.innerHTML = `<span class="chat-bubble-icon">${this.style.bubbleIcon}</span>`;
     }
-    
+
     bubble.addEventListener("click", () => this.renderChatWindow());
     this.target.appendChild(bubble);
   }
 
   async renderChatWindow() {
-    this.target.innerHTML = ""; // Clear existing content
+    this.target.innerHTML = "";
 
-    // Initialize conversation when chat window is opened
-    if (!this.conversationId) {
-      await this.initializeConversation();
+    // Ensure session is initialized before rendering
+    if (!this.sessionId) {
+      await this.initializeSession();
     }
 
     const chatWindow = document.createElement("div");
@@ -488,29 +683,26 @@ export default class Chatbot {
     minimizeButton.textContent = "➖";
     minimizeButton.title = this.phrases.minimize;
     minimizeButton.addEventListener("click", () => {
-      this.target.innerHTML = ""; // Clear chat window
-      this.renderBubble(); // Re-render bubble
+      this.stopPolling();
+      this.target.innerHTML = "";
+      this.renderBubble();
     });
 
     const closeButton = document.createElement("button");
     closeButton.textContent = "✖";
     closeButton.title = this.phrases.close;
     closeButton.addEventListener("click", () => {
-      if (confirm("Are you sure you want to close the chat? The conversation will be lost.")) {
-        if (this.ws) {
-          this.ws.close();
-          this.ws = null;
-        }
-        this.messages = []; // Clear message history
-        this.conversationId = null; // Clear conversation ID
-        
-        // Clear session data from cookies
+      if (confirm("Are you sure you want to close the chat? The session will be lost.")) {
+        this.stopPolling();
+        this.messages = [];
+        this.sessionId = null;
+
         if (this.cookiesEnabled) {
           this.deleteCookie(`chatbot_${this.id}_session`);
         }
-        
-        this.target.innerHTML = ""; // Clear chat window
-        this.renderBubble(); // Re-render bubble
+
+        this.target.innerHTML = "";
+        this.renderBubble();
       }
     });
 
@@ -520,12 +712,9 @@ export default class Chatbot {
     maximizeButton.addEventListener("click", () => {
       this.isMaximized = !this.isMaximized;
       maximizeButton.textContent = this.isMaximized ? "🔽" : "🔼";
-      maximizeButton.title = this.isMaximized
-        ? this.phrases.restore
-        : this.phrases.maximize;
+      maximizeButton.title = this.isMaximized ? this.phrases.restore : this.phrases.maximize;
       chatWindow.classList.toggle("maximized");
-      
-      // Add mobile-specific styling for full-screen experience
+
       if (this.isMobile) {
         chatWindow.classList.toggle("mobile");
       }
@@ -533,8 +722,16 @@ export default class Chatbot {
 
     const shareButton = document.createElement("button");
     shareButton.textContent = "🔗";
-    shareButton.title = "Share Conversation";
-    shareButton.addEventListener("click", () => this.copyConversationURL());
+    shareButton.title = "Share Session";
+    shareButton.addEventListener("click", () => this.copySessionURL());
+
+    if (this.config.newChatButton) {
+      const newChatButton = document.createElement("button");
+      newChatButton.textContent = "💬";
+      newChatButton.title = "New Chat";
+      newChatButton.addEventListener("click", () => this.startNewChat());
+      chatHeader.appendChild(newChatButton);
+    }
 
     chatHeader.appendChild(minimizeButton);
     chatHeader.appendChild(maximizeButton);
@@ -542,7 +739,6 @@ export default class Chatbot {
     chatHeader.appendChild(shareButton);
 
     const chatBody = this.createChatBody();
-
     const chatInput = this.createChatInput();
 
     chatWindow.appendChild(chatHeader);
@@ -551,15 +747,16 @@ export default class Chatbot {
 
     this.target.appendChild(chatWindow);
 
-    // Restore previous messages if they exist
     if (this.messages.length > 0) {
       this.messages.forEach(msg => {
         this.addMessage(msg.content, msg.sender, false);
       });
     } else if (this.config.welcomeMessage) {
-      // Only show welcome message if there are no previous messages
-      this.addMessage(this.config.welcomeMessage, "bot", true);
+      this.addMessage(this.config.welcomeMessage, "bot", false);
     }
+
+    // Start polling for new messages
+    this.startPolling();
   }
 
   createChatBody() {
@@ -576,23 +773,24 @@ export default class Chatbot {
     inputField.type = "text";
     inputField.placeholder = this.phrases.ph;
 
-    const fileInput = document.createElement("input");
-    fileInput.type = "file";
-    fileInput.id = "fileInput";
+    // TODO: File upload feature - implement later
+    // const fileInput = document.createElement("input");
+    // fileInput.type = "file";
+    // fileInput.id = "fileInput";
 
-    const fileLabel = document.createElement("label");
-    fileLabel.textContent = "📎";
-    fileLabel.title = this.phrases.attach;
-    fileLabel.htmlFor = "fileInput";
+    // const fileLabel = document.createElement("label");
+    // fileLabel.textContent = "📎";
+    // fileLabel.title = this.phrases.attach;
+    // fileLabel.htmlFor = "fileInput";
 
-    fileInput.addEventListener("change", () => {
-      const file = fileInput.files[0];
-      if (file) {
-        this.addMessage(`📎 ${this.phrases.file}: ${file.name}`, "user");
-        this.files[file.name] = file; // Store the file
-        fileInput.value = ""; // Clear the file input
-      }
-    });
+    // fileInput.addEventListener("change", () => {
+    //   const file = fileInput.files[0];
+    //   if (file) {
+    //     this.addMessage(`📎 ${this.phrases.file}: ${file.name}`, "user");
+    //     this.files[file.name] = file;
+    //     fileInput.value = "";
+    //   }
+    // });
 
     const sendButton = document.createElement("button");
     sendButton.textContent = this.phrases.send;
@@ -616,15 +814,15 @@ export default class Chatbot {
     });
 
     chatInput.appendChild(inputField);
-    chatInput.appendChild(fileInput);
-    chatInput.appendChild(fileLabel);
+    // chatInput.appendChild(fileInput);
+    // chatInput.appendChild(fileLabel);
     chatInput.appendChild(sendButton);
 
     return chatInput;
   }
 
   async renderEmbed() {
-    this.target.innerHTML = ""; // Clear any existing content
+    this.target.innerHTML = "";
 
     const chatContainer = document.createElement("div");
     chatContainer.className = "chat-container";
@@ -636,11 +834,13 @@ export default class Chatbot {
 
     chatContainer.appendChild(chatBody);
     chatContainer.appendChild(chatInput);
-    
+
     this.target.appendChild(chatContainer);
 
-    // Initialize conversation for embed - this will add the initial bot message
-    await this.initializeConversation();
+    await this.initializeSession();
+
+    // Start polling for embed mode too
+    this.startPolling();
   }
 
   addMessage(content, sender, store = true) {
@@ -654,164 +854,307 @@ export default class Chatbot {
     chatBody.appendChild(messageElement);
     chatBody.scrollTop = chatBody.scrollHeight;
 
-    // Store the message in memory if store flag is true
     if (store) {
       this.messages.push({ content, sender });
-      
-      // Update session data in cookies if enabled and auto-save is on
-      if (this.cookiesEnabled && this.config.autoSaveSession && this.conversationId) {
+      this.lastMessageCount = this.messages.length;
+
+      if (this.cookiesEnabled && this.config.autoSaveSession && this.sessionId) {
         this.updateLastMessageTime();
       }
     }
 
     if (sender === "user") {
-      // Send the user's message over the WebSocket with session_id
-      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.conversationId) {
-        const message = {
-          message: content,
-          session_id: this.conversationId
-        };
-        this.ws.send(JSON.stringify(message));
-      } else {
-        console.error("WebSocket is not open or no session ID");
-      }
+      this.sendUserMessage(content);
     }
   }
 
-  async initializeConversation() {
+  async sendUserMessage(message) {
+    // Rate limiting check
+    const now = Date.now();
+    const timeSinceLastMessage = now - this.lastMessageTime;
+    if (timeSinceLastMessage < this.messageCooldown) {
+      const remainingTime = Math.ceil((this.messageCooldown - timeSinceLastMessage) / 1000);
+      this.addMessage(`Please wait ${remainingTime} seconds before sending another message.`, "bot", false);
+      return;
+    }
+    this.lastMessageTime = now;
+
+    // Wait for session ID to be available (max 10 seconds)
+    let attempts = 0;
+    while (!this.sessionId && attempts < 20) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      attempts++;
+    }
+
+    if (!this.sessionId) {
+      console.error("No session ID available after waiting");
+      this.addMessage("Failed to initialize session. Please refresh and try again.", "bot", false);
+      return;
+    }
+
+    this.triggerLoadingBubble();
+
     try {
-      // Handle cookie permissions based on configuration
+      const data = await this.retryWithBackoff(async () => {
+        const response = await fetch(`${this.server}/api/v1/chat/${this.assistant}/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: message,
+            session_id: this.sessionId
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to send message: ${response.statusText}`);
+        }
+
+        return await response.json();
+      });
+
+      this.resetLoadingBubble();
+
+      this.addMessage(data.response, "bot", true);
+
+    } catch (error) {
+      console.error("Failed to send message after retries:", error);
+      this.resetLoadingBubble();
+      this.addMessage("Sorry, I'm having trouble responding right now. Please try again.", "bot", false);
+    }
+  }
+
+  async initializeSession() {
+    try {
       if (this.config.enableCookies) {
         if (this.config.askForCookies && !this.cookiesEnabled) {
           const cookieAccepted = await this.askForCookiePermission();
           if (!cookieAccepted) {
-            console.log('Cookies declined, starting new conversation');
+            console.log('Cookies declined, starting new session');
           }
         } else if (!this.config.askForCookies) {
-          // Auto-enable cookies without asking (for regions where permission is not required)
           this.cookiesEnabled = true;
           console.log('Cookies auto-enabled based on configuration');
         }
       } else {
-        // Cookies disabled by configuration
         this.cookiesEnabled = false;
         console.log('Cookies disabled by configuration');
       }
 
-      // Check for conversation ID in URL query parameters (highest priority)
-      const urlConversationId = this.getConversationIdFromURL();
-      if (urlConversationId) {
-        console.log(`Resuming conversation from URL: ${urlConversationId}`);
-        this.conversationId = urlConversationId;
-        this.initializeWebSocket();
+      const urlSessionId = this.getSessionIdFromURL();
+      if (urlSessionId) {
+        console.log(`Resuming session from URL: ${urlSessionId}`);
+        this.sessionId = urlSessionId;
+        await this.loadSessionHistory();
         return;
       }
 
-      // Check for existing session in cookies (if cookies enabled)
       if (this.cookiesEnabled) {
         this.sessionData = this.loadSessionData();
         if (this.sessionData) {
-          console.log(`Resuming conversation from cookies: ${this.sessionData.conversationId}`);
-          this.conversationId = this.sessionData.conversationId;
-          
-          // Try to restore messages from server history first
-          if (this.config.enableViewHistory) {
-            try {
-              const historyResponse = await fetch(`${this.server}/api/v1/public/sessions/${this.conversationId}/history`);
-              if (historyResponse.ok) {
-                const historyData = await historyResponse.json();
-                if (historyData.events && historyData.events.length > 0) {
-                  // Restore messages from server history
-                  this.messages = [];
-                  historyData.events.forEach(event => {
-                    if (event.event_type === 'message') {
-                      if (event.user_message) {
-                        this.messages.push({ content: event.user_message, sender: 'user' });
-                      }
-                      if (event.bot_response) {
-                        this.messages.push({ content: event.bot_response, sender: 'bot' });
-                      }
-                    }
-                  });
-                  
-                  // Display the messages in the chat
-                  this.messages.forEach(msg => {
-                    this.addMessage(msg.content, msg.sender, false);
-                  });
-                  
-                  console.log(`Restored ${this.messages.length} messages from server history`);
-                  this.initializeWebSocket();
-                  return;
-                }
-              }
-            } catch (error) {
-              console.warn('Failed to fetch server history, falling back to cookie data:', error);
-            }
-          }
-          
-          // Fallback to cookie data if server history failed
-          if (this.config.enableViewHistory && this.sessionData.messages && this.sessionData.messages.length > 0) {
-            this.messages = this.sessionData.messages;
-            // Display the messages in the chat
-            this.messages.forEach(msg => {
-              this.addMessage(msg.content, msg.sender, false);
-            });
-          }
-          
-          this.initializeWebSocket();
+          console.log(`Resuming session from cookies: ${this.sessionData.sessionId}`);
+          this.sessionId = this.sessionData.sessionId;
+          await this.loadSessionHistory();
           return;
         }
       }
 
-      // No existing conversation found, start a new one
-      console.log('Starting new conversation');
-      await this.startNewConversation();
+      console.log('Starting new session');
+      await this.startNewSession();
 
     } catch (error) {
-      console.error('Failed to initialize conversation:', error);
-      // Fallback: try to start a new conversation
-      await this.startNewConversation();
+      console.error('Failed to initialize session:', error);
+      this.showInitializationError();
     }
   }
 
-  async startNewConversation() {
-    try {
-      // Start a new conversation via REST API using the new secure endpoint
-      const response = await fetch(`${this.server}/api/v1/public/${this.assistant}/start_chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: "Hello" // Initial greeting message
-        })
-      });
+  showInitializationError() {
+    const chatBody = this.target.querySelector(".chat-body");
+    if (!chatBody) return;
 
+    const errorElement = document.createElement("div");
+    errorElement.className = "initialization-error";
+    errorElement.style.cssText = `
+      padding: 16px;
+      margin: 20px;
+      background: #fee;
+      border: 2px solid #fcc;
+      border-radius: 8px;
+      color: #c33;
+      text-align: center;
+      font-size: 14px;
+    `;
+    errorElement.innerHTML = `
+      <div style="font-weight: 600; margin-bottom: 8px;">Failed to Initialize Chat</div>
+      <div style="margin-bottom: 12px;">Unable to connect to the chat service. Please try again.</div>
+      <button onclick="location.reload()" style="
+        padding: 8px 16px;
+        background: #c33;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      ">Retry</button>
+    `;
+
+    chatBody.appendChild(errorElement);
+  }
+
+  async loadSessionHistory() {
+    try {
+      const response = await fetch(`${this.server}/api/v1/chat/sessions/${this.sessionId}/history`);
       if (!response.ok) {
-        throw new Error(`Failed to start conversation: ${response.statusText}`);
+        throw new Error('Failed to load history');
       }
 
       const data = await response.json();
-      this.conversationId = data.session_id;
-      
-      console.log(`New conversation started: ${this.conversationId}`);
 
-      // Add the initial bot response to the chat
+      if (data.messages && data.messages.length > 0) {
+        this.messages = data.messages.map(msg => ({
+          content: msg.content,
+          sender: msg.role === 'user' ? 'user' : 'bot'
+        }));
+
+        this.messages.forEach(msg => {
+          this.addMessage(msg.content, msg.sender, false);
+        });
+
+        this.lastMessageCount = this.messages.length;
+        console.log(`Restored ${this.messages.length} messages from history`);
+      }
+    } catch (error) {
+      console.warn('Failed to load session history:', error);
+    }
+  }
+
+  async startNewSession() {
+    try {
+      const data = await this.retryWithBackoff(async () => {
+        const response = await fetch(`${this.server}/api/v1/chat/${this.assistant}/start_chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: "Hello"
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to start session: ${response.statusText}`);
+        }
+
+        return await response.json();
+      });
+
+      this.sessionId = data.session_id;
+
+      console.log(`New session started: ${this.sessionId}`);
+
       this.addMessage(data.response, "bot", false);
+      this.lastMessageCount = 1;
 
-      // Save session data to cookies if enabled
       if (this.cookiesEnabled && this.config.autoSaveSession) {
         this.saveSessionData();
       }
 
-      // Now initialize WebSocket connection
-      this.initializeWebSocket();
-
     } catch (error) {
-      console.error('Failed to start new conversation:', error);
-      // Fallback: try to initialize WebSocket anyway
-      this.initializeWebSocket();
+      console.error('Failed to start new session after retries:', error);
+      throw error; // Re-throw to trigger error UI in initializeSession
     }
+  }
+
+  startPolling() {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+    }
+
+    this.pollingTimer = setInterval(async () => {
+      await this.pollForNewMessages();
+    }, this.config.pollingInterval);
+  }
+
+  stopPolling() {
+    if (this.pollingTimer) {
+      clearInterval(this.pollingTimer);
+      this.pollingTimer = null;
+    }
+  }
+
+  async pollForNewMessages() {
+    if (!this.sessionId) return;
+
+    try {
+      const response = await fetch(`${this.server}/api/v1/chat/sessions/${this.sessionId}/history`);
+      if (!response.ok) {
+        throw new Error(`Failed to poll: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      // Reset failure counter on successful poll
+      this.pollingFailures = 0;
+
+      if (data.messages && data.messages.length > this.lastMessageCount) {
+        // New messages available
+        const newMessages = data.messages.slice(this.lastMessageCount);
+
+        newMessages.forEach(msg => {
+          const sender = msg.role === 'user' ? 'user' : 'bot';
+          // Only add if not already in our local messages
+          if (!this.messages.some(m => m.content === msg.content && m.sender === sender)) {
+            this.addMessage(msg.content, sender, true);
+          }
+        });
+
+        this.lastMessageCount = data.messages.length;
+      }
+    } catch (error) {
+      this.pollingFailures++;
+      console.warn(`Polling failure ${this.pollingFailures}/${this.maxPollingFailures}:`, error.message);
+
+      if (this.pollingFailures >= this.maxPollingFailures) {
+        this.stopPolling();
+        this.showPollingError();
+      }
+    }
+  }
+
+  showPollingError() {
+    const chatBody = this.target.querySelector(".chat-body");
+    if (!chatBody) return;
+
+    const existingError = chatBody.querySelector(".polling-error");
+    if (existingError) return;
+
+    const errorElement = document.createElement("div");
+    errorElement.className = "polling-error";
+    errorElement.style.cssText = `
+      padding: 12px;
+      margin: 10px 0;
+      background: #fee;
+      border: 1px solid #fcc;
+      border-radius: 8px;
+      color: #c33;
+      text-align: center;
+      font-size: 14px;
+    `;
+    errorElement.innerHTML = `
+      <div>Connection lost. Unable to receive new messages.</div>
+      <button onclick="location.reload()" style="
+        margin-top: 8px;
+        padding: 6px 12px;
+        background: #c33;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      ">Refresh Page</button>
+    `;
+
+    chatBody.appendChild(errorElement);
   }
 
   triggerLoadingBubble() {
@@ -821,21 +1164,21 @@ export default class Chatbot {
 
     this.loadingTimeout = setTimeout(() => {
       this.addLoadingBubble();
-    }, 3000);
+    }, 1000);
   }
 
   addLoadingBubble() {
     const chatBody = this.target.querySelector(".chat-body");
     if (!chatBody) return;
 
-    if (chatBody.querySelector(".chat-loading")) return; // Prevent duplicate loading bubbles
+    if (chatBody.querySelector(".chat-loading")) return;
 
     const loadingElement = document.createElement("div");
     loadingElement.className = "chat-loading";
-    loadingElement.textContent = "Thinking"; // Base text (dots animated with CSS)
+    loadingElement.textContent = "Thinking";
 
     chatBody.appendChild(loadingElement);
-    chatBody.scrollTop = chatBody.scrollHeight; // Ensure it's visible
+    chatBody.scrollTop = chatBody.scrollHeight;
   }
 
   resetLoadingBubble() {
@@ -853,11 +1196,10 @@ export default class Chatbot {
     }
   }
 
-  // Cookie management methods
-  setCookie(name, value, minutes = 10080) { // Default: 7 days (10080 minutes)
+  setCookie(name, value, minutes = 10080) {
     try {
       const expires = new Date();
-      expires.setTime(expires.getTime() + (minutes * 60 * 1000)); // Convert minutes to milliseconds
+      expires.setTime(expires.getTime() + (minutes * 60 * 1000));
       document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/`;
       this.cookiesEnabled = true;
       return true;
@@ -898,46 +1240,41 @@ export default class Chatbot {
     }
   }
 
-  // Session management methods
   saveSessionData() {
-    if (!this.cookiesEnabled || !this.conversationId || !this.config.autoSaveSession) return false;
-    
+    if (!this.cookiesEnabled || !this.sessionId || !this.config.autoSaveSession) return false;
+
     const sessionData = {
-      conversationId: this.conversationId,
+      sessionId: this.sessionId,
       startTime: Date.now(),
       lastMessageTime: Date.now(),
       assistant: this.assistant,
       messages: this.config.enableViewHistory ? this.messages.slice(-this.config.maxStoredMessages) : []
     };
-    
+
     return this.setCookie(`chatbot_${this.id}_session`, JSON.stringify(sessionData), this.config.cookieExpiryMinutes);
   }
 
   loadSessionData() {
     const sessionCookie = this.getCookie(`chatbot_${this.id}_session`);
     if (!sessionCookie) return null;
-    
+
     try {
       const sessionData = JSON.parse(sessionCookie);
-      
-      // Check if session is still valid (within configured hours)
+
       const now = Date.now();
       const sessionAge = now - sessionData.startTime;
-      const maxSessionAge = this.config.sessionExpiryMinutes * 60 * 1000; // Convert minutes to milliseconds
-      
+      const maxSessionAge = this.config.sessionExpiryMinutes * 60 * 1000;
+
       if (sessionAge > maxSessionAge) {
-        // Session expired, remove cookie
         this.deleteCookie(`chatbot_${this.id}_session`);
         return null;
       }
-      
-      // Check if this is the same assistant
+
       if (sessionData.assistant !== this.assistant) {
-        // Different assistant, remove cookie
         this.deleteCookie(`chatbot_${this.id}_session`);
         return null;
       }
-      
+
       return sessionData;
     } catch (e) {
       console.warn('Invalid session data in cookie:', e);
@@ -947,8 +1284,8 @@ export default class Chatbot {
   }
 
   updateLastMessageTime() {
-    if (!this.cookiesEnabled || !this.conversationId || !this.config.autoSaveSession) return;
-    
+    if (!this.cookiesEnabled || !this.sessionId || !this.config.autoSaveSession) return;
+
     const sessionCookie = this.getCookie(`chatbot_${this.id}_session`);
     if (sessionCookie) {
       try {
@@ -962,13 +1299,12 @@ export default class Chatbot {
     }
   }
 
-  // Check for conversation ID in URL query parameters
-  getConversationIdFromURL() {
+  // todo: we dont use sessions, we use sessions under the /chat routes
+  getSessionIdFromURL() {
     const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('conversation_id');
+    return urlParams.get('session_id');
   }
 
-  // Ask user for cookie permission
   askForCookiePermission() {
     return new Promise((resolve) => {
       const cookieDialog = document.createElement('div');
@@ -976,15 +1312,14 @@ export default class Chatbot {
       cookieDialog.innerHTML = `
         <div class="cookie-dialog-content">
           <h3>Enable Chat History</h3>
-          <p>Would you like to enable cookies to save your chat history? This will allow you to continue conversations even after closing your browser.</p>
+          <p>Would you like to enable cookies to save your chat history? This will allow you to continue sessions even after closing your browser.</p>
           <div class="cookie-buttons">
             <button class="cookie-accept">Accept</button>
             <button class="cookie-decline">Decline</button>
           </div>
         </div>
       `;
-      
-      // Add styles for the dialog
+
       const styles = `
         .cookie-permission-dialog {
           position: fixed;
@@ -1028,122 +1363,86 @@ export default class Chatbot {
           color: #333;
         }
       `;
-      
+
       const styleSheet = document.createElement("style");
       styleSheet.type = "text/css";
       styleSheet.textContent = styles;
+      styleSheet.id = "cookie-dialog-styles";
       document.head.appendChild(styleSheet);
-      
+
       document.body.appendChild(cookieDialog);
-      
-      cookieDialog.querySelector('.cookie-accept').addEventListener('click', () => {
+
+      const cleanup = () => {
         document.body.removeChild(cookieDialog);
+        const existingStyles = document.getElementById("cookie-dialog-styles");
+        if (existingStyles) {
+          document.head.removeChild(existingStyles);
+        }
+      };
+
+      cookieDialog.querySelector('.cookie-accept').addEventListener('click', () => {
+        cleanup();
         this.cookiesEnabled = true;
         resolve(true);
       });
-      
+
       cookieDialog.querySelector('.cookie-decline').addEventListener('click', () => {
-        document.body.removeChild(cookieDialog);
+        cleanup();
         this.cookiesEnabled = false;
         resolve(false);
       });
     });
   }
 
-  initializeWebSocket() {
-    if (this.ws) {
-      // If there's an existing connection, close it
-      this.ws.close();
-    }
-
-    // Establish a WebSocket connection (no token required)
-    const wsUrl = this.server.replace('http://', 'ws://').replace('https://', 'wss://');
-    this.ws = new WebSocket(`${wsUrl}/api/v1/public/${this.assistant}/ws`);
-
-    // WebSocket event handlers
-    this.ws.onopen = () => {
-      console.log("WebSocket connected");
-      
-      // No need to send join message - session is already established via REST API
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === "message") {
-          this.addMessage(data.content, data.role === "user" ? "user" : "bot", false);
-        } else if (data.type === "error") {
-          console.error("WebSocket error:", data.content);
-          this.addMessage(`Error: ${data.content}`, "bot", false);
-        } else if (data.response) {
-          // Handle direct response format
-          this.addMessage(data.response, "bot", false);
-          
-          // Update session data in cookies if this is a new conversation
-          if (this.cookiesEnabled && this.conversationId && !this.sessionData) {
-            this.saveSessionData();
-          }
-        }
-      } catch (e) {
-        // If the message is plain text (fallback)
-        this.addMessage(event.data, "bot");
-      }
-    };
-
-    this.ws.onclose = () => {
-      console.log("WebSocket connection closed");
-    };
-
-    this.ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
-
-    // Add page visibility change listener to save session data
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.cookiesEnabled && this.conversationId) {
-        // Page is hidden (user switched tabs or minimized), save session data
-        this.saveSessionData();
-      }
-    });
-
-    // Add beforeunload listener to save session data when leaving the page
-    window.addEventListener('beforeunload', () => {
-      if (this.cookiesEnabled && this.conversationId) {
-        this.saveSessionData();
-      }
-    });
-  }
-
-  // Generate shareable conversation URL
   generateShareableURL() {
-    if (!this.conversationId) return null;
-    
+    if (!this.sessionId) return null;
+
     const currentUrl = new URL(window.location.href);
-    currentUrl.searchParams.set('conversation_id', this.conversationId);
+    currentUrl.searchParams.set('session_id', this.sessionId);
     return currentUrl.toString();
   }
 
-  // Copy conversation URL to clipboard
-  async copyConversationURL() {
+  async copySessionURL() {
     const shareableURL = this.generateShareableURL();
     if (!shareableURL) {
-      alert('No conversation to share');
+      alert('No session to share');
       return;
     }
-    
+
     try {
       await navigator.clipboard.writeText(shareableURL);
-      alert('Conversation URL copied to clipboard!');
+      alert('Session URL copied to clipboard!');
     } catch (err) {
-      // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = shareableURL;
       document.body.appendChild(textArea);
       textArea.select();
       document.execCommand('copy');
       document.body.removeChild(textArea);
-      alert('Conversation URL copied to clipboard!');
+      alert('Session URL copied to clipboard!');
+    }
+  }
+
+  async startNewChat() {
+    if (confirm("Start a new chat? The current session will be lost.")) {
+      this.stopPolling();
+
+      this.messages = [];
+      this.sessionId = null;
+      this.sessionData = null;
+      this.lastMessageCount = 0;
+
+      if (this.cookiesEnabled) {
+        this.deleteCookie(`chatbot_${this.id}_session`);
+      }
+
+      const chatBody = this.target.querySelector(".chat-body");
+      if (chatBody) {
+        chatBody.innerHTML = "";
+      }
+
+      await this.startNewSession();
+      this.startPolling();
     }
   }
 
@@ -1161,4 +1460,8 @@ export default class Chatbot {
       return navigator.userAgent.match(toMatchItem);
     });
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.Chatbot = Chatbot;
 }

@@ -1,0 +1,23 @@
+{
+  "name": "inaza-chatbots",
+  "version": "1.0.0",
+  "description": "Public repo for chatbots on client side",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nSurely/inaza-chatbots.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/nSurely/inaza-chatbots/issues"
+  },
+  "homepage": "https://github.com/nSurely/inaza-chatbots#readme",
+  "dependencies": {
+    "fs-extra": "^11.3.2",
+    "uglify-js": "^3.19.3"
+  }
+}
