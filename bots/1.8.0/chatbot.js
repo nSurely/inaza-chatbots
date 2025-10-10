@@ -418,7 +418,7 @@ export default class Chatbot {
           .chat-message {
             padding: 12px 16px;
             border-radius: 12px;
-            max-width: 85%;
+            max-width: 75%;
             display: flex;
             align-items: flex-start;
             gap: 10px;
@@ -643,22 +643,14 @@ export default class Chatbot {
 
           /* Start Questions Overlay */
           .start-questions-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(255, 255, 255, 0.98);
-            backdrop-filter: blur(8px);
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            justify-content: flex-start;
             gap: 16px;
-            padding: 32px 24px;
-            z-index: 10;
+            padding: 24px 20px;
             animation: fadeIn 0.3s ease-in-out;
-            overflow-y: auto;
+            width: 100%;
           }
           @keyframes fadeIn {
             from {
@@ -680,19 +672,39 @@ export default class Chatbot {
             animation: fadeOut 0.3s ease-in-out;
           }
           .start-questions-title {
-            font-size: 18px;
+            font-size: 16px;
             font-weight: 600;
             color: #2c3e50;
-            margin-bottom: 8px;
-            text-align: center;
+            margin-bottom: 6px;
+            text-align: left;
             font-family: ${fontFamily};
+            width: 100%;
+            max-width: 340px;
           }
           .start-questions-subtitle {
-            font-size: 14px;
+            font-size: 13px;
             color: #6b7280;
             margin-bottom: 16px;
-            text-align: center;
+            text-align: left;
             font-family: ${fontFamily};
+            width: 100%;
+            max-width: 340px;
+          }
+          .start-questions-skip {
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            color: #9ca3af;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: ${fontFamily};
+            font-weight: ${this.style.fontWeight};
+            font-size: 12px;
+            margin-top: 8px;
+            align-self: center;
+          }
+          .start-questions-skip:hover {
+            color: #6b7280;
           }
           .start-questions-container {
             display: flex;
@@ -700,6 +712,7 @@ export default class Chatbot {
             gap: 12px;
             width: 100%;
             max-width: 340px;
+            margin-top: 12px;
           }
           .start-question-button {
             padding: 16px 20px;
@@ -778,16 +791,23 @@ export default class Chatbot {
               padding: 12px 16px;
             }
             .start-questions-overlay {
-              padding: 24px 16px;
+              padding: 20px 16px;
             }
             .start-questions-title {
-              font-size: 16px;
+              font-size: 15px;
+              max-width: 100%;
             }
             .start-questions-subtitle {
-              font-size: 13px;
+              font-size: 12px;
+              margin-bottom: 12px;
+              max-width: 100%;
             }
             .start-questions-container {
               max-width: 100%;
+              margin-top: 0;
+            }
+            .start-questions-skip {
+              font-size: 11px;
             }
             .start-question-button {
               padding: 14px 16px;
@@ -1180,11 +1200,13 @@ export default class Chatbot {
     const overlay = document.createElement("div");
     overlay.className = "start-questions-overlay";
 
+    // Add title
     const title = document.createElement("div");
     title.className = "start-questions-title";
     title.textContent = "How can we help you today?";
     overlay.appendChild(title);
 
+    // Add subtitle
     const subtitle = document.createElement("div");
     subtitle.className = "start-questions-subtitle";
     subtitle.textContent = "Choose a question to get started quickly";
@@ -1230,6 +1252,22 @@ export default class Chatbot {
     });
 
     overlay.appendChild(container);
+
+    // Add skip button at the end
+    const skipButton = document.createElement("button");
+    skipButton.className = "start-questions-skip";
+    skipButton.textContent = "Skip";
+    skipButton.setAttribute("type", "button");
+    skipButton.addEventListener("click", () => {
+      overlay.classList.add("fade-out");
+      setTimeout(() => {
+        if (overlay.parentNode) {
+          overlay.parentNode.removeChild(overlay);
+        }
+      }, 300);
+    });
+    overlay.appendChild(skipButton);
+
     return overlay;
   }
 
