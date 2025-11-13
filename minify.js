@@ -24,7 +24,9 @@ if (!fs.existsSync(latestDir)) {
 // the last one is the latest version
 function getBotDirectories() {
   const dirs = fs.readdirSync(botsDir).filter((file) => {
-    return fs.lstatSync(path.join(botsDir, file)).isDirectory();
+    const isDir = fs.lstatSync(path.join(botsDir, file)).isDirectory();
+    // Exclude the 'latest' directory as it's not a version directory
+    return isDir && file !== 'latest';
   });
 
   // Sort directories by version number
@@ -61,8 +63,8 @@ function copyToLatestAndRoot(dir) {
   const latestPath = path.join(latestDir, minifiedFileName);
   const rootPath = path.join(rootDir, minifiedFileName);
   if (fs.existsSync(minifiedPath)) {
-    fse.copySync(minifiedPath, latestPath);
-    fse.copySync(minifiedPath, rootPath);
+    fse.copySync(minifiedPath, latestPath, { overwrite: true });
+    fse.copySync(minifiedPath, rootPath, { overwrite: true });
     console.log(`Copied ${minifiedPath} to ${latestPath} and ${rootPath}`);
   } else {
     console.warn(`No minified file found in ${dir} to copy`);
@@ -70,7 +72,16 @@ function copyToLatestAndRoot(dir) {
 }
 
 const botDirs = getBotDirectories();
+
+// First, minify all versions
 botDirs.forEach((dir) => {
   minifyChatbotJS(dir);
-  copyToLatestAndRoot(dir);
 });
+
+// Then, copy only the latest version to latest directory and root
+if (botDirs.length > 0) {
+  const latestVersion = botDirs[botDirs.length - 1];
+  copyToLatestAndRoot(latestVersion);
+} else {
+  console.warn("No bot directories found");
+}
