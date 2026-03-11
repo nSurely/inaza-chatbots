@@ -55,7 +55,7 @@ export default class Chatbot {
     style = {},
     config = {},
     contextVariables = null,
-    context = null,
+    authToken = null,
   }) {
     this.target = target || document.getElementById("chat-container");
     this.id = id;
@@ -70,7 +70,7 @@ export default class Chatbot {
     }
 
     this.contextVariables = contextVariables;
-    this.context = context;
+    this.authToken = authToken;
 
     this.style = {
       color: style.color || "#0078d4",
@@ -2635,7 +2635,7 @@ export default class Chatbot {
               },
               body: JSON.stringify({
                 message: messageToSend,
-                context: this.context
+                auth_token: this.authToken
               })
             });
 
@@ -2828,7 +2828,7 @@ export default class Chatbot {
           },
           body: JSON.stringify({
             message: "Hello",
-            context: this.context
+            auth_token: this.authToken
           })
         });
 
@@ -2868,7 +2868,7 @@ export default class Chatbot {
           },
           body: JSON.stringify({
             message: "Session initialized for file upload",
-            context: this.context
+            auth_token: this.authToken
           })
         });
 
