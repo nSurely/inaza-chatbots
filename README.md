@@ -7,6 +7,9 @@ Public repo for the client-side chat widget, served to client sites via jsDelivr
 - **V2 (`bots/2.0.x`) is the production line.** It is the V1 base plus SSE real-time delivery,
   proactive messages, multimodal (image) rendering, and sub-agent task indicators. All new work
   lands here.
+  - `2.0.3` — extends `2.0.2`: the composer also stays hidden through the `start_questions` step,
+    and is revealed only once the user enters the chat (picks or skips a question; or, when there
+    are no `start_questions`, submits/skips the gate).
   - `2.0.2` — hides the bottom composer (message input + upload) while a `start_inputs` gate is
     showing, and reveals it once the gate is submitted (Continue/Skip). Prevents typing past a
     required pre-chat gate.
