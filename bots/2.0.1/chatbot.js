@@ -2306,7 +2306,19 @@ class Chatbot {
         if (overlay.parentNode) {
           overlay.parentNode.removeChild(overlay);
         }
-        // Focus on the message input after the overlay is removed
+        // If pre-chat inputs (e.g. a policy number) were collected via start_inputs,
+        // send them on their own so the agent still receives that context when the
+        // user skips the question options instead of picking one.
+        if (this.isFirstMessage && Object.keys(this.collectedInputs).length > 0) {
+          const inputsText = Object.entries(this.collectedInputs)
+            .map(([prompt, value]) => `${prompt}${value}`)
+            .join('\n');
+          this.collectedInputs = {};
+          this.isFirstMessage = false;
+          this.addMessage(inputsText, "user");
+          return;
+        }
+        // Otherwise focus the message input after the overlay is removed
         const inputField = this.target.querySelector('.chat-input input[type="text"]');
         if (inputField) {
           inputField.focus();
