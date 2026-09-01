@@ -7,6 +7,11 @@ Public repo for the client-side chat widget, served to client sites via jsDelivr
 - **V2 (`bots/2.0.x`) is the production line.** It is the V1 base plus SSE real-time delivery,
   proactive messages, multimodal (image) rendering, and sub-agent task indicators. All new work
   lands here.
+  - `2.0.7` — per-agent availability hours. Reads `GET /api/v1/chat/{agent}/availability`, renders
+    a closed-hours notice or an ai_only banner, refuses to open the composer when the server
+    returns 503 with an AvailabilityStatus body, and re-checks hours once a minute while the panel
+    is open. Fails open on any fetch error (the API enforces hours independently). Ports the
+    `1.19.0` implementation forward onto the 2.x line.
   - `2.0.3` — extends `2.0.2`: the composer also stays hidden through the `start_questions` step,
     and is revealed only once the user enters the chat (picks or skips a question; or, when there
     are no `start_questions`, submits/skips the gate).
@@ -14,8 +19,8 @@ Public repo for the client-side chat widget, served to client sites via jsDelivr
     showing, and reveals it once the gate is submitted (Continue/Skip). Prevents typing past a
     required pre-chat gate.
   - `2.0.1` — first production V2 pin (full V1 parity + close/reopen session-state reset).
-- **V1 (`bots/1.x`) is frozen at `1.18.1`** (final: includes the close/reopen session-state reset).
-  No new features; security/critical fixes only.
+- **V1 (`bots/1.x`) is at `1.19.0`.** `1.18.1` was intended as the freeze point but `1.19.0` added
+  availability hours before the same work was ported to `2.x`. Prefer `2.0.7+` for new embeds.
 
 ## Embedding
 
